@@ -11,6 +11,77 @@ let catalog = null;
 let activeWorker = null;
 const consoleLogs = [];
 
+/**
+ * Renders a highly polished capability status card matching Sandbox isolation categories.
+ */
+function renderCapabilityCard(name, capability, description) {
+  const status = capability?.status || 'missing-api';
+  const reason = capability?.reason || '';
+  const details = capability?.details || '';
+
+  let statusText = '';
+  let dotColor = 'bg-gray-500';
+  let borderColor = 'border-[#2A2D35]';
+  let badgeColor = 'bg-[#1E2229] text-gray-400';
+
+  if (status === 'supported') {
+    statusText = 'Supported';
+    dotColor = 'bg-[#34D399]';
+    borderColor = 'border-[#34D399]/35';
+    badgeColor = 'bg-[#101915] text-[#34D399] border-[#34D399]/20';
+  } else if (status === 'blocked-by-iframe-or-permission-policy') {
+    statusText = 'Blocked by Iframe / Policies';
+    dotColor = 'bg-amber-400';
+    borderColor = 'border-amber-500/35';
+    badgeColor = 'bg-amber-950/20 text-amber-400 border-amber-500/20';
+  } else if (status === 'blocked-by-header-requirement') {
+    statusText = 'Blocked by Header / Context';
+    dotColor = 'bg-violet-400';
+    borderColor = 'border-violet-500/35';
+    badgeColor = 'bg-violet-950/20 text-violet-400 border-violet-500/20';
+  } else if (status === 'runtime-error') {
+    statusText = 'Runtime Error';
+    dotColor = 'bg-rose-500';
+    borderColor = 'border-rose-500/35';
+    badgeColor = 'bg-rose-950/20 text-rose-400 border-rose-500/20';
+  } else {
+    // missing-api
+    statusText = 'Missing API';
+    dotColor = 'bg-gray-600';
+    borderColor = 'border-[#2A2D35]';
+    badgeColor = 'bg-[#1E2229] text-gray-500';
+  }
+
+  return `
+    <article class="bg-[#12151B] border ${borderColor} p-5 flex flex-col justify-between gap-4 transition-all hover:border-[#4F5666]/30">
+      <div class="space-y-2">
+        <div class="flex justify-between items-start gap-2">
+          <h3 class="font-sans font-medium text-sm tracking-tight text-white">${name}</h3>
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[9px] font-mono font-bold border rounded-none ${badgeColor} uppercase tracking-wider">
+            <span class="w-1.5 h-1.5 rounded-full ${dotColor}"></span>
+            ${statusText}
+          </span>
+        </div>
+        <p class="text-[11px] font-sans text-gray-400 leading-relaxed">${description.trim()}</p>
+      </div>
+      
+      ${reason ? `
+        <div class="mt-2 bg-[#0A0C10] border border-rose-950/25 p-3 text-[10px] font-mono text-rose-300 leading-normal">
+          <span class="text-rose-400 font-bold uppercase block mb-1">Blocked Reason:</span>
+          ${reason}
+        </div>
+      ` : ''}
+
+      ${details ? `
+        <div class="mt-2 bg-[#0A0C10] border border-[#2A2D35] p-3 text-[10px] font-mono text-[#34D399] leading-normal">
+          <span class="text-cyan-400 font-bold uppercase block mb-1">Runtime Status:</span>
+          ${details}
+        </div>
+      ` : ''}
+    </article>
+  `;
+}
+
 // App boot coordinates
 async function initializeDiagnostics() {
   const rootElement = document.getElementById('root');
@@ -395,30 +466,90 @@ async function initializeDiagnostics() {
 
 /**
  * Fallback boot structure targeting Dedicated Compute Worker thread sequentially.
+ * Handshakes with the worker using a ping-pong pattern to ascertain absolute readiness
+ * across iframe boundaries and module loading capabilities.
  */
 async function bootWorkerChain() {
   const primaryModulePath = './src/worker.js';
 
+  // Helper validation loop
+  const attemptLaunch = (path, isModule) => {
+    return new Promise((resolve, reject) => {
+      let resolved = false;
+      let w;
+      
+      try {
+        w = new Worker(path, isModule ? { type: 'module' } : undefined);
+      } catch (err) {
+        return reject(err);
+      }
+
+      // Safe clean up callback
+      const cleanUp = () => {
+        resolved = true;
+        w.removeEventListener('message', handleHandshake);
+        w.removeEventListener('error', handleError);
+        clearTimeout(timeoutId);
+      };
+
+      // Handler for PING/PONG message
+      const handleHandshake = (msg) => {
+        if (msg.data && msg.data.type === 'PONG') {
+          cleanUp();
+          resolve(w);
+        }
+      };
+
+      // Handler for load/execution errors
+      const handleError = (err) => {
+        err.preventDefault();
+        cleanUp();
+        try { w.terminate(); } catch (_) {}
+        reject(err);
+      };
+
+      // Set timeout boundary for handshake (350ms is highly safe yet fast)
+      const timeoutId = setTimeout(() => {
+        cleanUp();
+        try { w.terminate(); } catch (_) {}
+        reject(new Error('Handshake timeout: Web Worker did not respond with PONG.'));
+      }, 350);
+
+      w.addEventListener('message', handleHandshake);
+      w.addEventListener('error', handleError);
+
+      // Programmatically trigger ping handshake
+      try {
+        w.postMessage({ type: 'PING' });
+      } catch (err) {
+        handleError(err);
+      }
+    });
+  };
+
   // 1. Module Worker (Standard External URI)
   try {
-    const worker = new Worker(primaryModulePath, { type: 'module' });
-    // Quick echo handshake trace
+    logConsole('System', 'Trying Tier 1: External ES module Web Worker...');
+    const worker = await attemptLaunch(primaryModulePath, true);
+    logConsole('System', 'Tier 1 Web Worker loaded & verified successfully.');
     return worker;
   } catch (err) {
-    logConsole('System', 'External ES module Web Worker initialization fails. Trying Blob URL compile fallback loop...');
+    logConsole('System', `Tier 1 launch failed or blocked: ${err.message || err}. Trying Tier 2 fallback compile...`);
   }
 
-  // 2. Fallback Inline Module blob compile
+  // 2. Fallback Inline Module blob compilation
   try {
+    logConsole('System', 'Trying Tier 2: Inline Blob URL Web Worker...');
     const response = await fetch(primaryModulePath);
     const sourceCode = await response.text();
     const blob = new Blob([sourceCode], { type: 'application/javascript' });
     const blobURL = URL.createObjectURL(blob);
-    const worker = new Worker(blobURL);
+    const worker = await attemptLaunch(blobURL, false);
+    logConsole('System', 'Tier 2 Web Worker compiled & verified successfully.');
     return worker;
   } catch (err) {
-    logConsole('System', 'Inline Blob URL script compilation also blocked by Frame Content Security Policy or network.');
-    throw new Error('Web Worker instantiation completely blocked.');
+    logConsole('System', `Tier 2 compile blocked by Frame Content Security Policy or network limit: ${err.message || err}`);
+    throw new Error('Web Worker instantiation completely blocked across module & inline blob fallbacks.');
   }
 }
 
@@ -480,8 +611,37 @@ async function startIngestionFlow() {
         throw new Error('Web worker inactive or crashed inside browser container. Aborting thread tasks.');
       }
 
-      // Prepare promise waiting for the worker loop
+      // Query database catalog for existing active version to represent as parent version path
+      const existingDataset = await catalog.getDataset(datasetId);
+      const parentVersionId = existingDataset ? existingDataset.activeVersion : null;
+      logConsole('Main-Thread', `Parent active version pointer detected: ${parentVersionId || 'None (First Commit)'}`);
+
+      // Prepare promise waiting for the worker loop with safety timeout & crash protections
       const workerJobPromise = new Promise((resolve, reject) => {
+        let finished = false;
+
+        const cleanUpAndFinish = () => {
+          finished = true;
+          activeWorker.removeEventListener('message', handleMessage);
+          activeWorker.removeEventListener('error', handleError);
+          clearTimeout(timeoutId);
+        };
+
+        const timeoutId = setTimeout(() => {
+          if (!finished) {
+            cleanUpAndFinish();
+            reject(new Error('Ingestion process exceeded the 30-second timeout boundary. Ingestion pipeline aborted.'));
+          }
+        }, 30000);
+
+        const handleError = (err) => {
+          if (!finished) {
+            cleanUpAndFinish();
+            err.preventDefault();
+            reject(new Error(`Worker thread encountered a fatal operational crash: ${err.message || 'Unknown compilation structure error'}`));
+          }
+        };
+
         const handleMessage = (msg) => {
           const { type, stage, progress, details, manifest, error } = msg.data;
 
@@ -501,17 +661,22 @@ async function startIngestionFlow() {
           }
 
           if (type === 'STAGING_COMPLETED') {
-            activeWorker.removeEventListener('message', handleMessage);
-            resolve(manifest);
+            if (!finished) {
+              cleanUpAndFinish();
+              resolve(manifest);
+            }
           }
 
           if (type === 'STAGING_FAILED') {
-            activeWorker.removeEventListener('message', handleMessage);
-            reject(new Error(error));
+            if (!finished) {
+              cleanUpAndFinish();
+              reject(new Error(error));
+            }
           }
         };
 
         activeWorker.addEventListener('message', handleMessage);
+        activeWorker.addEventListener('error', handleError);
         
         // Post message payload to worker
         activeWorker.postMessage({
@@ -521,7 +686,8 @@ async function startIngestionFlow() {
             jobId,
             content: txtContent,
             maxChunkSize: 200, // Small chunk sizes to simulate multi-block fragment patterns clearly
-            safetyMarginBytes: customMarginBytes
+            safetyMarginBytes: customMarginBytes,
+            parentVersionId: parentVersionId
           }
         });
       });

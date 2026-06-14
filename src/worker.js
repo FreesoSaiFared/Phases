@@ -7,6 +7,11 @@
 self.onmessage = async (e) => {
   const { type, payload } = e.data;
 
+  if (type === 'PING') {
+    self.postMessage({ type: 'PONG' });
+    return;
+  }
+
   if (type === 'START_STAGING') {
     try {
       await executeStagingJob(payload);
@@ -23,7 +28,7 @@ self.onmessage = async (e) => {
  * Executes a chunk-and-digest ingestion staging job inside OPFS.
  */
 async function executeStagingJob(payload) {
-  const { datasetId, jobId, content, maxChunkSize = 256 * 1024, safetyMarginBytes = 50 * 1024 * 1024 } = payload;
+  const { datasetId, jobId, content, maxChunkSize = 256 * 1024, safetyMarginBytes = 50 * 1024 * 1024, parentVersionId = null } = payload;
   
   // Transition State Machine
   self.postMessage({ type: 'STAGE_CHANGED', stage: 'staging', progress: 0 });
@@ -49,6 +54,9 @@ async function executeStagingJob(payload) {
   const binaryContent = encoder.encode(content);
   const totalLength = binaryContent.byteLength;
   const chunkCount = Math.ceil(totalLength / maxChunkSize);
+
+  // Measure total rows in the entire input content
+  const totalRows = (content.match(/\r?\n/g) || []).length + 1;
 
   self.postMessage({ 
     type: 'STAGE_CHANGED', 
@@ -84,6 +92,7 @@ async function executeStagingJob(payload) {
 
     const chunkId = `chunk-${String(i).padStart(4, '0')}`;
     const chunkFileName = `${chunkId}.bin`;
+    const relativeOpfsPath = `/datasets/${datasetId}/staging/${jobId}/${chunkFileName}`;
 
     // Write slice to discrete file handle
     try {
@@ -119,11 +128,17 @@ async function executeStagingJob(payload) {
       .map(b => b.toString(16).padStart(2, '0'))
       .join('');
 
+    // Decode chunk binary to string directly to locate row counts
+    const chunkText = new TextDecoder().decode(chunkSlice);
+    const chunkRowCount = (chunkText.match(/\r?\n/g) || []).length + 1;
+
     chunkMetadataList.push({
       chunkId,
       fileName: chunkFileName,
+      opfsPath: relativeOpfsPath,
       byteRange: [startByte, endByte],
       size: chunkSize,
+      rowCount: chunkRowCount,
       sha256: hashHex
     });
 
@@ -159,7 +174,9 @@ async function executeStagingJob(payload) {
   const finalManifest = {
     datasetId,
     jobId,
+    parentVersionId: parentVersionId || null,
     totalBytes: totalLength,
+    totalRows: totalRows,
     chunks: chunkMetadataList,
     manifestHash: manifestHashHex,
     schemaSignature: 'SHA256-BINARY-CHUNKS-V1',
