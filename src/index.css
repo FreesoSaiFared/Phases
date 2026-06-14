@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime&family=Inter:wght@300;400;500;600;700&display=swap');
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+  --font-mono: "Courier Prime", "Courier New", Courier, monospace;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0F1115;
+  color: #E0E2E6;
+  font-family: var(--font-sans);
+}
+
+.main-container {
+  background-color: #0A0C10;
+  border-color: #2A2D35;
+}
+
+.diag-card {
+  border-color: #2A2D35;
+  background-color: #12151B;
+}
+
+.dot-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: .5;
+    transform: scale(1.15);
+  }
+}
+

@@ -1,0 +1,6 @@
+{
+  "name": "Substrate Diagnostics",
+  "description": "Chrome Canary-first experimental native web browser capabilities and substrate iframe diagnostics engine.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
