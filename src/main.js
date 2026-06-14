@@ -147,6 +147,11 @@ async function initializeDiagnostics() {
   logConsole('System', 'Booting Dedicated Worker thread fallback loop...');
   try {
     activeWorker = await bootWorkerChain();
+    if (activeWorker) {
+      activeWorker.addEventListener('error', (err) => {
+        logConsole('Worker-Crash', `Fatal unhandled operational crash: ${err.message || 'Worker thread compilation error'}`);
+      });
+    }
     logConsole('System', 'Dedicated worker instantiated successfully and waiting for payload arrays.');
   } catch (err) {
     logConsole('Error', `Worker critical: ${err.message}`);
@@ -817,24 +822,66 @@ async function refreshCatalogLogDisplay() {
       // Render records reverse order chronology
       historyGrid.innerHTML = records.map(record => {
         const d = new Date(record.createdAt).toLocaleTimeString();
+        const manifest = record.manifest || {};
+        const parentVersionId = manifest.parentVersionId || 'None (First Commit)';
+        const totalRows = manifest.totalRows || 0;
+        
+        // Render block detail items
+        const chunksHtml = (manifest.chunks || []).map(chunk => {
+          return `<div class="bg-[#0A0C10] border border-[#2A2D35]/50 px-3 py-1.5 flex flex-col sm:flex-row justify-between text-[9px] text-[#8C94A6]">
+            <div>
+              <span class="text-white font-bold">${chunk.chunkId}</span>: 
+              <span class="text-[#636975]">${chunk.opfsPath}</span>
+            </div>
+            <div class="space-x-2">
+              <span>Size: <span class="text-white">${chunk.size} B</span></span>
+              <span>Rows: <span class="text-cyan-400">${chunk.rowCount}</span></span>
+            </div>
+          </div>`;
+        }).join('');
+
         return `
-          <div class="bg-[#12151B] border border-[#2A2D35] p-4 font-mono text-xs flex flex-col md:flex-row justify-between items-start md:items-center gap-4 hover:border-cyan-900/40 transition-all select-text">
-            <div class="space-y-1">
-              <div class="flex items-center gap-2">
-                <span class="text-white font-bold">${record.datasetId}</span>
-                <span class="px-2 py-0.5 rounded-none bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[9px] uppercase font-bold">Active Pointer</span>
+          <div class="bg-[#12151B] border border-[#2A2D35] p-5 font-mono text-xs flex flex-col gap-4 hover:border-cyan-950 transition-all select-text">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-[#2A2D35]/50 pb-3 gap-2">
+              <div class="space-y-0.5">
+                <div class="flex items-center gap-2">
+                  <span class="text-white font-bold text-sm">${record.datasetId}</span>
+                  <span class="px-2 py-0.5 rounded-none bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[8px] uppercase font-bold tracking-wider">Active version pointer</span>
+                </div>
+                <div class="text-[9px] text-[#636975]">Timestamp: ${d}</div>
               </div>
-              <div class="text-[10px] text-gray-400 flex flex-wrap gap-x-4">
-                <span>Active Version ID: <span class="text-cyan-400 font-semibold">${record.activeVersion}</span></span>
-                <span>Payload Size: <span class="text-white">${record.manifest.totalBytes} B</span></span>
-                <span>Staged Blocks: <span class="text-white">${record.manifest.chunks.length}</span></span>
-              </div>
-              <div class="text-[9px] text-[#636975] truncate max-w-lg" title="SHA-256 integrity hash: ${record.manifest.manifestHash}">
-                Integrity Signature: ${record.manifest.manifestHash}
+              <div class="text-right">
+                <div class="text-[9px] text-gray-400">Parent Version: <span class="text-[#FBBF24] font-semibold">${parentVersionId}</span></div>
+                <div class="text-[9px] text-gray-400">Active Version: <span class="text-cyan-400 font-semibold">${record.activeVersion}</span></div>
               </div>
             </div>
-            <div class="text-[10px] text-[#636975] self-end md:self-center font-bold">
-              ${d}
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-[#0A0C10] p-3 border border-[#2A2D35]/50 text-[10px]">
+              <div>
+                <span class="text-[#636975] block uppercase font-bold text-[8px] tracking-wider">Total bytes</span>
+                <span class="text-white leading-normal font-semibold">${manifest.totalBytes || 0} B</span>
+              </div>
+              <div>
+                <span class="text-[#636975] block uppercase font-bold text-[8px] tracking-wider">Total Rows</span>
+                <span class="text-white leading-normal font-semibold">${totalRows}</span>
+              </div>
+              <div>
+                <span class="text-[#636975] block uppercase font-bold text-[8px] tracking-wider">Chunk Blocks</span>
+                <span class="text-white leading-normal font-semibold">${(manifest.chunks || []).length} items</span>
+              </div>
+              <div>
+                <span class="text-[#636975] block uppercase font-bold text-[8px] tracking-wider">Schema version</span>
+                <span class="text-[#34D399] leading-normal font-mono font-semibold">${manifest.schemaSignature || 'N/A'}</span>
+              </div>
+            </div>
+
+            <div class="space-y-1.5 mt-1">
+              <span class="text-[#636975] block uppercase font-bold text-[8px] tracking-wider mb-1">Structural catalog segment chunks</span>
+              ${chunksHtml}
+            </div>
+
+            <div class="text-[9px] text-[#636975] bg-[#0A0C10] p-2.5 border border-[#2A2D35]/50 truncate font-semibold" title="SHA-256 integrity hash: ${manifest.manifestHash}">
+              <span class="text-cyan-400">Integrity Checksum:</span> ${manifest.manifestHash}
             </div>
           </div>
         `;

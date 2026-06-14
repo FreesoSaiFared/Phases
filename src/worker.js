@@ -45,6 +45,10 @@ async function executeStagingJob(payload) {
         stage: 'paused-low-quota',
         error: `Insufficient system storage: ${Math.round(freeSpace / 1024 / 1024)}MB free space is below the safety threshold of ${Math.round(safetyMarginBytes / 1024 / 1024)}MB.`
       });
+      self.postMessage({
+        type: 'STAGING_FAILED',
+        error: `Insufficient system storage: ${Math.round(freeSpace / 1024 / 1024)}MB free space is below the safety threshold of ${Math.round(safetyMarginBytes / 1024 / 1024)}MB.`
+      });
       return;
     }
   }
@@ -115,6 +119,10 @@ async function executeStagingJob(payload) {
         self.postMessage({
           type: 'STAGE_CHANGED',
           stage: 'failed-quota',
+          error: `Staging aborted: System storage limit exceeded while writing ${chunkId}.`
+        });
+        self.postMessage({
+          type: 'STAGING_FAILED',
           error: `Staging aborted: System storage limit exceeded while writing ${chunkId}.`
         });
         return;
