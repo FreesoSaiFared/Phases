@@ -3,84 +3,13 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { runDiagnosticsMatrix } from './capabilities.js';
+import { runDiagnosticsMatrix, renderCapabilityCard } from './capabilities.js';
 import { CatalogManager } from './storage.js';
 
 // Global singletons for runtime evaluation
 let catalog = null;
 let activeWorker = null;
 const consoleLogs = [];
-
-/**
- * Renders a highly polished capability status card matching Sandbox isolation categories.
- */
-function renderCapabilityCard(name, capability, description) {
-  const status = capability?.status || 'missing-api';
-  const reason = capability?.reason || '';
-  const details = capability?.details || '';
-
-  let statusText = '';
-  let dotColor = 'bg-gray-500';
-  let borderColor = 'border-[#2A2D35]';
-  let badgeColor = 'bg-[#1E2229] text-gray-400';
-
-  if (status === 'supported') {
-    statusText = 'Supported';
-    dotColor = 'bg-[#34D399]';
-    borderColor = 'border-[#34D399]/35';
-    badgeColor = 'bg-[#101915] text-[#34D399] border-[#34D399]/20';
-  } else if (status === 'blocked-by-iframe-or-permission-policy') {
-    statusText = 'Blocked by Iframe / Policies';
-    dotColor = 'bg-amber-400';
-    borderColor = 'border-amber-500/35';
-    badgeColor = 'bg-amber-950/20 text-amber-400 border-amber-500/20';
-  } else if (status === 'blocked-by-header-requirement') {
-    statusText = 'Blocked by Header / Context';
-    dotColor = 'bg-violet-400';
-    borderColor = 'border-violet-500/35';
-    badgeColor = 'bg-violet-950/20 text-violet-400 border-violet-500/20';
-  } else if (status === 'runtime-error') {
-    statusText = 'Runtime Error';
-    dotColor = 'bg-rose-500';
-    borderColor = 'border-rose-500/35';
-    badgeColor = 'bg-rose-950/20 text-rose-400 border-rose-500/20';
-  } else {
-    // missing-api
-    statusText = 'Missing API';
-    dotColor = 'bg-gray-600';
-    borderColor = 'border-[#2A2D35]';
-    badgeColor = 'bg-[#1E2229] text-gray-500';
-  }
-
-  return `
-    <article class="bg-[#12151B] border ${borderColor} p-5 flex flex-col justify-between gap-4 transition-all hover:border-[#4F5666]/30">
-      <div class="space-y-2">
-        <div class="flex justify-between items-start gap-2">
-          <h3 class="font-sans font-medium text-sm tracking-tight text-white">${name}</h3>
-          <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 text-[9px] font-mono font-bold border rounded-none ${badgeColor} uppercase tracking-wider">
-            <span class="w-1.5 h-1.5 rounded-full ${dotColor}"></span>
-            ${statusText}
-          </span>
-        </div>
-        <p class="text-[11px] font-sans text-gray-400 leading-relaxed">${description.trim()}</p>
-      </div>
-      
-      ${reason ? `
-        <div class="mt-2 bg-[#0A0C10] border border-rose-950/25 p-3 text-[10px] font-mono text-rose-300 leading-normal">
-          <span class="text-rose-400 font-bold uppercase block mb-1">Blocked Reason:</span>
-          ${reason}
-        </div>
-      ` : ''}
-
-      ${details ? `
-        <div class="mt-2 bg-[#0A0C10] border border-[#2A2D35] p-3 text-[10px] font-mono text-[#34D399] leading-normal">
-          <span class="text-cyan-400 font-bold uppercase block mb-1">Runtime Status:</span>
-          ${details}
-        </div>
-      ` : ''}
-    </article>
-  `;
-}
 
 // App boot coordinates
 async function initializeDiagnostics() {
@@ -485,6 +414,7 @@ async function bootWorkerChain() {
       
       try {
         w = new Worker(path, isModule ? { type: 'module' } : undefined);
+        w.onerror = handleError;
       } catch (err) {
         return reject(err);
       }
@@ -492,6 +422,7 @@ async function bootWorkerChain() {
       // Safe clean up callback
       const cleanUp = () => {
         resolved = true;
+        w.onerror = null;
         w.removeEventListener('message', handleHandshake);
         w.removeEventListener('error', handleError);
         clearTimeout(timeoutId);
@@ -656,6 +587,12 @@ async function startIngestionFlow() {
             logConsole('Worker-Thread', `Stage state updated: ${stage.toUpperCase()} ${details ? ' - ' + details : ''}`);
             if (error) {
               logConsole('Error', error);
+            }
+            if (stage === 'paused-low-quota' || stage === 'failed-quota') {
+              if (!finished) {
+                cleanUpAndFinish();
+                resolve(null);
+              }
             }
           }
 
